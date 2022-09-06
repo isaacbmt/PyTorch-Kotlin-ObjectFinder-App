@@ -5,20 +5,32 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.widget.Button
 import android.widget.ImageView
+
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.graphics.drawable.BitmapDrawable
+import android.media.Image
 import android.os.Bundle
+
 import androidx.appcompat.app.AppCompatActivity
 import androidx.navigation.findNavController
 import androidx.navigation.ui.AppBarConfiguration
 import androidx.navigation.ui.navigateUp
+import androidx.activity.result.contract.ActivityResultContracts
+
 import android.view.Menu
 import android.view.MenuItem
-import androidx.activity.result.contract.ActivityResultContracts
-//import com.example.imageplayground.databinding.ActivityMainBinding
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+
 
 class MainActivity : AppCompatActivity() {
+    val imageSegmentator = ImageSegmentator(Dispatchers.IO)
+    val imageSegmentatorViewModel = ImageSegmentatorViewModel(imageSegmentator)
     lateinit var imageView: ImageView
-    lateinit var button: Button
-//    private val pickImage = 100
+    lateinit var pickerButton: Button
+    lateinit var segmentButton: Button
     private var imageUri: Uri? = null
     private lateinit var appBarConfiguration: AppBarConfiguration
 //    private lateinit var binding: ActivityMainBinding
@@ -27,22 +39,35 @@ class MainActivity : AppCompatActivity() {
         if (result.resultCode == RESULT_OK) {
             imageUri = result.data?.data
             imageView.setImageURI(imageUri)
+            if (imageUri != null) {
+                segmentButton.isEnabled = true
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-//        WindowCompat.setDecorFitsSystemWindows(window, false)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         title = "Image playground app"
         imageView = findViewById(R.id.imagePreview)
-        button = findViewById(R.id.photoPicker)
-        button.setOnClickListener {
+        pickerButton = findViewById(R.id.photoPicker)
+        segmentButton = findViewById(R.id.photoSegment)
+        segmentButton.isEnabled = false
+
+        pickerButton.setOnClickListener {
             val gallery = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.INTERNAL_CONTENT_URI)
             getContent.launch(gallery)
         }
-
-
+        segmentButton.setOnClickListener {
+            val drawable = imageView.drawable as BitmapDrawable
+            val bitmapImage: Bitmap = drawable.bitmap
+            val moduleFileAbsoluteFilePath: String = File(
+                Utils.assetFilePath(this, "deeplabv3_model_optimized_m.ptl")
+            ).absolutePath
+            print("module path: ")
+            println(moduleFileAbsoluteFilePath)
+            imageSegmentatorViewModel.startSegmentation(bitmapImage, moduleFileAbsoluteFilePath, imageView)
+        }
 //    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
 //        super.onActivityResult(requestCode, resultCode, data)
 //        if (resultCode == RESULT_OK && requestCode == pickImage) {

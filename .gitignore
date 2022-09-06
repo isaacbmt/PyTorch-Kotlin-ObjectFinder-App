@@ -13,4 +13,4 @@
 .externalNativeBuild
 .cxx
 local.properties
-deeplabv3_model_optimized.ptl
+/app/src/main/assets/deeplabv3_model_optimized_m.ptl
