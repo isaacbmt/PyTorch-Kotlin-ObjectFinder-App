@@ -1,5 +1,6 @@
 package com.example.imageplayground
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.provider.MediaStore
@@ -12,6 +13,7 @@ import android.graphics.ImageDecoder
 import android.graphics.drawable.BitmapDrawable
 import android.media.Image
 import android.os.Bundle
+import android.os.Environment
 
 import androidx.appcompat.app.AppCompatActivity
 import androidx.navigation.findNavController
@@ -21,26 +23,39 @@ import androidx.activity.result.contract.ActivityResultContracts
 
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.Toast
+import androidx.core.view.isInvisible
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import org.pytorch.IValue
+import org.pytorch.LiteModuleLoader
+import org.pytorch.Module
+import org.pytorch.Tensor
+import org.pytorch.torchvision.TensorImageUtils
+import java.io.FileOutputStream
+import kotlin.math.roundToInt
 
 
 class MainActivity : AppCompatActivity() {
     val imageSegmentator = ImageSegmentator(Dispatchers.IO)
     val imageSegmentatorViewModel = ImageSegmentatorViewModel(imageSegmentator)
     lateinit var imageView: ImageView
+    lateinit var segmentedView: ImageView
+    lateinit var filteredView: ImageView
     lateinit var pickerButton: Button
     lateinit var segmentButton: Button
+    lateinit var saveButton: Button
     private var imageUri: Uri? = null
-    private lateinit var appBarConfiguration: AppBarConfiguration
-//    private lateinit var binding: ActivityMainBinding
 
-    var getContent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    private var getContent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
             imageUri = result.data?.data
             imageView.setImageURI(imageUri)
             if (imageUri != null) {
+                saveButton.isInvisible = true
                 segmentButton.isEnabled = true
+                segmentedView.setImageDrawable(null)
+                filteredView.setImageDrawable(null)
             }
         }
     }
@@ -49,67 +64,87 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         title = "Image playground app"
-        imageView = findViewById(R.id.imagePreview)
-        pickerButton = findViewById(R.id.photoPicker)
-        segmentButton = findViewById(R.id.photoSegment)
+        imageView       = findViewById(R.id.imagePreview)
+        segmentedView   = findViewById(R.id.segmentedPreview)
+        filteredView    = findViewById(R.id.filteredPreview)
+        pickerButton    = findViewById(R.id.photoPicker)
+        segmentButton   = findViewById(R.id.photoSegment)
+        saveButton      = findViewById(R.id.saveButton)
+
         segmentButton.isEnabled = false
+        saveButton.isInvisible = true
 
         pickerButton.setOnClickListener {
             val gallery = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.INTERNAL_CONTENT_URI)
             getContent.launch(gallery)
         }
         segmentButton.setOnClickListener {
-            val drawable = imageView.drawable as BitmapDrawable
-            val bitmapImage: Bitmap = drawable.bitmap
-            val moduleFileAbsoluteFilePath: String = File(
-                Utils.assetFilePath(this, "deeplabv3_model_optimized_m.ptl")
-            ).absolutePath
-            print("module path: ")
-            println(moduleFileAbsoluteFilePath)
-            imageSegmentatorViewModel.startSegmentation(bitmapImage, moduleFileAbsoluteFilePath, imageView)
+            runSegmentation()
         }
-//    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-//        super.onActivityResult(requestCode, resultCode, data)
-//        if (resultCode == RESULT_OK && requestCode == pickImage) {
-//            imageUri = data?.data
-//            imageView.setImageURI(imageUri)
-//        }
-//    }
-//        binding = ActivityMainBinding.inflate(layoutInflater)
-//        setContentView(binding.root)
-//
-//        setSupportActionBar(binding.toolbar)
-//
-//        val navController = findNavController(R.id.nav_host_fragment_content_main)
-//        appBarConfiguration = AppBarConfiguration(navController.graph)
-//        setupActionBarWithNavController(navController, appBarConfiguration)
-//
-//        binding.fab.setOnClickListener { view ->
-//            Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
-//                .setAnchorView(R.id.fab)
-//                .setAction("Action", null).show()
-//        }
+        saveButton.setOnClickListener {
+            saveCroppedImage()
+        }
+        getClassObject()
     }
 
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        // Inflate the menu; this adds items to the action bar if it is present.
-        menuInflater.inflate(R.menu.menu_main, menu)
-        return true
-    }
+    @SuppressLint("ClickableViewAccessibility")
+    fun getClassObject() {
+        segmentedView.setOnTouchListener { _, event ->
+            val x = event.x.toInt()
+            val y = event.y.toInt()
 
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        // Handle action bar item clicks here. The action bar will
-        // automatically handle clicks on the Home/Up button, so long
-        // as you specify a parent activity in AndroidManifest.xml.
-        return when (item.itemId) {
-            R.id.action_settings -> true
-            else -> super.onOptionsItemSelected(item)
+            val drawable = segmentedView.drawable as BitmapDrawable
+            val bitmap: Bitmap = drawable.bitmap
+
+            val segWidth = segmentedView.width
+            val width = bitmap.width
+            val height = bitmap.height
+            val margin = (segWidth.toFloat() - width.toFloat()) / 2.toFloat()
+
+            if (x > margin && x < margin + width) {
+                val xx = x - margin.toInt()
+                cropImage(width, height, xx, y)
+            }
+            true
         }
     }
 
-    override fun onSupportNavigateUp(): Boolean {
-        val navController = findNavController(R.id.nav_host_fragment_content_main)
-        return navController.navigateUp(appBarConfiguration)
-                || super.onSupportNavigateUp()
+    private fun cropImage(width: Int, height: Int, x: Int, y: Int) {
+        val inputTensor = TensorImageUtils.bitmapToFloat32Tensor(
+                            (imageView.drawable as BitmapDrawable).bitmap,
+                            TensorImageUtils.TORCHVISION_NORM_MEAN_RGB,
+                            TensorImageUtils.TORCHVISION_NORM_STD_RGB)
+
+        val mask = imageSegmentator.outputTensor.dataAsLongArray
+        val color = mask[y*width + x]
+
+        val outputBitmap = Utils.applyMask(
+            inputTensor.dataAsFloatArray,
+            mask,
+            color, width, height)
+
+        filteredView.setImageBitmap(outputBitmap)
+        saveButton.isInvisible = false
+
+    }
+
+    private fun saveCroppedImage() {
+        val imageBitmap = (filteredView.drawable as BitmapDrawable).bitmap
+        val imgDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
+        val file = File(imgDir, "result_image.png")
+        val imgFileOutputStream = FileOutputStream(file)
+        imageBitmap.compress(Bitmap.CompressFormat.PNG, 100, imgFileOutputStream)
+        MediaStore.Images.Media.insertImage(this.contentResolver, imageBitmap, "Image title", null)
+        Toast.makeText(this@MainActivity, "Image Saved!", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun runSegmentation() {
+        val drawable = imageView.drawable as BitmapDrawable
+        val bitmapImage: Bitmap = drawable.bitmap
+        val moduleFileAbsoluteFilePath: String = File(
+            Utils.assetFilePath(this, "deeplabv3_model_optimized_m.ptl")
+        ).absolutePath
+        imageSegmentatorViewModel.startSegmentation(bitmapImage, moduleFileAbsoluteFilePath, this)
     }
 }
+

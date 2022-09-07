@@ -1,12 +1,15 @@
 package com.example.imageplayground
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
+import org.pytorch.torchvision.TensorImageUtils
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.util.*
+import kotlin.math.roundToInt
 
 object Utils {
 
@@ -38,50 +41,36 @@ object Utils {
         return ""
     }
 
-    fun assetFilePath2(context: Context, assetName: String): String {
-        val file = File(context.filesDir, assetName)
+    fun applyMask(input: FloatArray, mask: LongArray, color: Long, width: Int, height: Int): Bitmap {
+        val length = width * height
+        val pixels = IntArray(length)
 
-        try {
-            context.assets.open(assetName).use { `is` ->
-                FileOutputStream(file).use { os ->
-                    val buffer = ByteArray(4 * 1024)
-                    while (true) {
-                        val length = `is`.read(buffer)
-                        if (length <= 0)
-                            break
-                        os.write(buffer, 0, length)
-                    }
-                    os.flush()
-                    os.close()
-                }
-                return file.absolutePath
+        val normStdRGB = TensorImageUtils.TORCHVISION_NORM_STD_RGB
+        val normMeanRGB = TensorImageUtils.TORCHVISION_NORM_MEAN_RGB
+        val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+
+        var a: Int
+        var r: Int
+        var g: Int
+        var b: Int
+        val conversion = { v: Float -> ((v.coerceIn(0.0f, 1.0f))*255.0f).roundToInt() }
+        for (i in 0 until length) {
+            if (mask[i % length] == color) {
+                a = 0xff
+                r = conversion(input[i] * normStdRGB[0] + normMeanRGB[0])
+                g = conversion(input[i + length] * normStdRGB[1] + normMeanRGB[1])
+                b = conversion(input[i + 2 * length] * normStdRGB[2] + normMeanRGB[2])
+            } else {
+                a = 0 // alpha channel: 0 = invisible
+                r = 255
+                g = 255
+                b = 255
             }
-        } catch (e: IOException) {
-            Log.e("pytorchandroid", "Error process asset $assetName to file path")
+            pixels[i] = a shl 24 or (r.toInt() and 0xff shl 16) or (g.toInt() and 0xff shl 8) or (b.toInt() and 0xff)
         }
 
-        return "File not found"
+        output.setPixels(pixels, 0, width, 0, 0, width, height)
+        return output
     }
 
-    fun topK(a: FloatArray, topk: Int): IntArray {
-        val values = FloatArray(topk)
-        Arrays.fill(values, -java.lang.Float.MAX_VALUE)
-        val ixs = IntArray(topk)
-        Arrays.fill(ixs, -1)
-
-        for (i in a.indices) {
-            for (j in 0 until topk) {
-                if (a[i] > values[j]) {
-                    for (k in topk - 1 downTo j + 1) {
-                        values[k] = values[k - 1]
-                        ixs[k] = ixs[k - 1]
-                    }
-                    values[j] = a[i]
-                    ixs[j] = i
-                    break
-                }
-            }
-        }
-        return ixs
-    }
 }
