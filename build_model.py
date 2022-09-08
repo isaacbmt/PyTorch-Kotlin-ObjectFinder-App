@@ -52,7 +52,6 @@ output = model(input_batch)["out"][0]
 print(output.dtype)
 output = torch.argmax(output, 0).squeeze(0)
 print("labels: ", torch.unique(output))
-print("output shape: ", output.shape)
 print(output)
 plt.imshow(output)
 plt.show()
