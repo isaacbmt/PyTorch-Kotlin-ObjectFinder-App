@@ -15,3 +15,5 @@
 local.properties
 /app/src/main/assets/deeplabv3_model_optimized_m.ptl
 /app/src/main/assets/utils.ptl
+/.idea/
+/__pycache__/
